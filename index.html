@@ -118,7 +118,7 @@ async function load() {
     const [dishes, swaps, comps, runs] = await Promise.all([
       all('allergen_dish', '*', (q) => q.eq('active', true).order('category').order('name')),
       all('allergen_swap', '*'),
-      all('allergen_component', 'key,type,name,contains,may_contain,unknown', (q) => q.order('name')),
+      all('allergen_component', 'key,type,name,guest_name,contains,may_contain,unknown', (q) => q.order('name')),
       sb.from('allergen_sync_run').select('*').order('started_at', { ascending: false }).limit(1)
     ]);
     S.dishes = dishes; S.swaps = swaps; S.comps = comps;
@@ -144,6 +144,9 @@ function compHtml(d, c, used) {
   return `<div class="comp ${suspended ? 'suspended' : ''}">
     <div><b>${esc(c.name)}</b> <span class="muted">· ${esc(c.type)} · ${esc(c.qty)}</span>${status}</div>
     <div class="chips">${chips || '<span class="muted">No allergens</span>'}${c.unknown ? '<span class="chip may">Missing allergen data in Procure Wizard</span>' : ''}</div>
+    ${(c.contains || []).length ? `<div class="row guest" data-key="${esc(c.key)}"><span class="muted">Guests see it as:</span>
+      <input type="text" class="gname" placeholder="Plain name, no brands — e.g. Mayonnaise" value="${esc(S.comps.find((x) => x.key === c.key)?.guest_name || '')}">
+      <button class="small save-guest">Save name</button></div>` : ''}
     ${(c.sources || []).length ? `<div class="src">${c.sources.map((s) => `${esc(s.path)}: ${esc(s.contains.map(short).join(', '))}`).join('<br>')}</div>` : ''}
     ${suspended ? `<div class="flag" style="margin-top:6px">⚠ ${esc(sw.suspended_reason)}</div>` : ''}
     ${(c.contains || []).length ? `<div class="approve" data-id="${esc(id)}">
@@ -244,6 +247,14 @@ $('list').addEventListener('click', async (e) => {
     };
     const { error } = await sb.from('allergen_dish').update(patch).eq('pw_dish_id', dish.pw_dish_id);
     toast(error ? 'Could not save: ' + error.message : 'Saved');
+    if (!error) load();
+    return;
+  }
+  if (btn.classList.contains('save-guest')) {
+    const row = btn.closest('.guest');
+    const name = row.querySelector('.gname').value.trim();
+    const { error } = await sb.from('allergen_component').update({ guest_name: name || null }).eq('key', row.dataset.key);
+    toast(error ? 'Could not save: ' + error.message : name ? `Guests now see “${name}” on every dish with it` : 'Name cleared — guests see a tidied Procure Wizard name');
     if (!error) load();
     return;
   }
