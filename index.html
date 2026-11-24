@@ -39,7 +39,8 @@
   .approve { margin-top:8px; background:#faf7f4; border-radius:8px; padding:10px; display:grid; gap:8px; }
   .settings { background:#faf7f4; border-radius:8px; padding:10px; display:grid; gap:8px; grid-template-columns:1fr 1fr; }
   .settings .full { grid-column:1 / -1; }
-  #login { max-width:360px; margin:12vh auto; background:#fff; border:1px solid var(--line); border-radius:14px; padding:22px; display:grid; gap:10px; }
+  [hidden] { display:none !important; }
+  #login, #reset { max-width:360px; margin:12vh auto; background:#fff; border:1px solid var(--line); border-radius:14px; padding:22px; display:grid; gap:10px; }
   #toast { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); background:var(--ink); color:#fff; padding:10px 14px; border-radius:10px; font-size:14px; display:none; max-width:90vw; }
   @media (max-width:600px) { .settings { grid-template-columns:1fr; } }
 </style>
@@ -52,7 +53,17 @@
   <input id="email" type="email" placeholder="Email" autocomplete="username">
   <input id="password" type="password" placeholder="Password" autocomplete="current-password">
   <button class="primary" id="signin">Sign in</button>
+  <button class="small" id="forgot" type="button">Forgot password? Email me a reset link</button>
   <p class="muted" id="loginMsg"></p>
+</div>
+
+<div id="reset" hidden>
+  <h1>Set a new password</h1>
+  <p class="muted">Choose a new password for the allergen swaps admin (at least 8 characters).</p>
+  <input id="newPass" type="password" placeholder="New password" autocomplete="new-password">
+  <input id="newPass2" type="password" placeholder="Type it again" autocomplete="new-password">
+  <button class="primary" id="savePass">Save new password</button>
+  <p class="muted" id="resetMsg"></p>
 </div>
 
 <div id="app" hidden>
@@ -91,6 +102,9 @@ import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 
 const SUPABASE_URL = 'https://zeercurbhqcxwgjmxahg.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_z1NMvndK1vpoGDLtiQe1PA_pSBSMncl'; // public key: data is protected by row-level security
+// Read the reset link's details before the Supabase client tidies them out of the address bar.
+const ARRIVED = new URLSearchParams(location.hash.replace(/^#/, ''));
+let recovering = ARRIVED.get('type') === 'recovery';
 const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const $ = (id) => document.getElementById(id);
@@ -305,11 +319,45 @@ $('signin').addEventListener('click', async () => {
 });
 $('signout').addEventListener('click', () => sb.auth.signOut());
 
-sb.auth.onAuthStateChange((_e, session) => {
-  S.user = session?.user || null;
+// Forgot password: Supabase emails a one-time link back to this page, which then asks for a new password.
+$('forgot').addEventListener('click', async () => {
+  const email = $('email').value.trim();
+  if (!email) { $('loginMsg').textContent = 'Type your email above first, then press “Forgot password?”.'; $('email').focus(); return; }
+  $('loginMsg').textContent = 'Sending…';
+  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+  $('loginMsg').textContent = error
+    ? `Couldn't send the reset email: ${error.message}`
+    : `If ${email} is an admin login, a reset link is on its way. Check your junk folder too. The link works once and expires after an hour.`;
+});
+if (ARRIVED.get('error')) {
+  $('loginMsg').textContent = /expired|invalid/i.test(ARRIVED.get('error_description') || ARRIVED.get('error_code') || '')
+    ? 'That reset link has expired or was already used. Press “Forgot password?” to get a new one.'
+    : `Reset link problem: ${ARRIVED.get('error_description') || ARRIVED.get('error')}`;
+}
+$('savePass').addEventListener('click', async () => {
+  const p1 = $('newPass').value, p2 = $('newPass2').value;
+  if (p1.length < 8) { $('resetMsg').textContent = 'Use at least 8 characters.'; return; }
+  if (p1 !== p2) { $('resetMsg').textContent = 'The two passwords don’t match.'; return; }
+  $('resetMsg').textContent = 'Saving…';
+  const { error } = await sb.auth.updateUser({ password: p1 });
+  if (error) { $('resetMsg').textContent = `Couldn't save: ${error.message}`; return; }
+  $('newPass').value = $('newPass2').value = '';
+  recovering = false;
+  history.replaceState(null, '', location.pathname);
+  toast('Password changed — you’re signed in');
+  show();
+});
+
+function show() {
+  $('reset').hidden = !(recovering && S.user);
   $('login').hidden = !!S.user;
-  $('app').hidden = !S.user;
-  if (S.user) load();
+  $('app').hidden = !S.user || recovering;
+  if (S.user && !recovering) load();
+}
+sb.auth.onAuthStateChange((event, session) => {
+  if (event === 'PASSWORD_RECOVERY') recovering = true;
+  S.user = session?.user || null;
+  show();
 });
 </script>
 </body>
