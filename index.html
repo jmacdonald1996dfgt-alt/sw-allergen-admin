@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Allergen Swaps · Smith &amp; Western</title>
+<style>
+  :root { --bg:#f6f2ee; --card:#fff; --ink:#1f1a17; --muted:#6b5f57; --line:#e4dbd3; --accent:#8b1e1e; --ok:#1d6b3a; --okbg:#e6f4ea; --warn:#8a4b00; --warnbg:#fff4dc; --bad:#9b1c1c; --badbg:#fde8e8; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  header { position:sticky; top:0; z-index:5; background:#fffaf6; border-bottom:1px solid var(--line); padding:12px 16px; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  h1 { font-size:18px; margin:0; }
+  .muted { color:var(--muted); font-size:13px; }
+  main { max-width:960px; margin:0 auto; padding:16px; }
+  input, select, button, textarea { font:inherit; }
+  input[type=text], input[type=email], input[type=password], select { border:1px solid var(--line); border-radius:8px; padding:7px 10px; background:#fff; min-width:0; }
+  button { border:1px solid var(--line); background:#fff; border-radius:8px; padding:7px 12px; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.small { padding:4px 9px; font-size:13px; }
+  button[aria-pressed=true] { background:var(--ink); color:#fff; border-color:var(--ink); }
+  button:disabled { opacity:.5; cursor:default; }
+  .notice { border:1px solid #e9b65b; background:var(--warnbg); color:#6b3d00; border-radius:10px; padding:10px 12px; font-size:13px; margin-bottom:12px; }
+  .section { font-size:12px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:18px 0 6px; }
+  .dish { background:var(--card); border:1px solid var(--line); border-radius:12px; margin-bottom:8px; }
+  .dish > summary { list-style:none; cursor:pointer; padding:12px 14px; }
+  .dish > summary::-webkit-details-marker { display:none; }
+  .name { font-weight:650; }
+  .pill { display:inline-block; font-size:11px; font-weight:700; border-radius:999px; padding:2px 8px; margin-left:6px; vertical-align:middle; }
+  .p-web { background:#e3edff; color:#1d4ea8; } .p-ok { background:var(--okbg); color:var(--ok); } .p-warn { background:var(--warnbg); color:var(--warn); }
+  .chips { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
+  .chip { font-size:11.5px; border-radius:5px; padding:2px 6px; background:var(--badbg); color:var(--bad); font-weight:600; }
+  .chip.may { background:#eee; color:#555; font-weight:500; }
+  .body { border-top:1px solid var(--line); padding:12px 14px; display:grid; gap:10px; }
+  .flag { color:var(--warn); font-size:13px; }
+  .comp { border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .comp.suspended { border-color:#e9b65b; background:#fffaf0; }
+  .src { font-size:12.5px; color:var(--muted); margin-top:6px; }
+  .approve { margin-top:8px; background:#faf7f4; border-radius:8px; padding:10px; display:grid; gap:8px; }
+  .settings { background:#faf7f4; border-radius:8px; padding:10px; display:grid; gap:8px; grid-template-columns:1fr 1fr; }
+  .settings .full { grid-column:1 / -1; }
+  #login { max-width:360px; margin:12vh auto; background:#fff; border:1px solid var(--line); border-radius:14px; padding:22px; display:grid; gap:10px; }
+  #toast { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); background:var(--ink); color:#fff; padding:10px 14px; border-radius:10px; font-size:14px; display:none; max-width:90vw; }
+  @media (max-width:600px) { .settings { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+
+<div id="login" hidden>
+  <h1>Allergen swaps</h1>
+  <p class="muted">Sign in with the admin login set up in Supabase.</p>
+  <input id="email" type="email" placeholder="Email" autocomplete="username">
+  <input id="password" type="password" placeholder="Password" autocomplete="current-password">
+  <button class="primary" id="signin">Sign in</button>
+  <p class="muted" id="loginMsg"></p>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <div class="row">
+      <div style="flex:1;min-width:200px">
+        <h1>Allergen swaps</h1>
+        <div class="muted" id="syncInfo">Loading…</div>
+      </div>
+      <button id="syncNow">Sync now</button>
+      <button id="signout" class="small">Sign out</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <input id="search" type="text" placeholder="Search a dish or part…" style="flex:1;min-width:180px">
+      <select id="view">
+        <option value="website">On the website</option>
+        <option value="check">Needs checking</option>
+        <option value="approved">Has approved changes</option>
+        <option value="all">Every Procure Wizard dish</option>
+      </select>
+    </div>
+  </header>
+  <main>
+    <div class="notice">
+      Only approve a change the kitchen can <b>always</b> make. When a guest picks an allergen on the website, a dish shows as
+      <b>“Suitable with changes”</b> only if every part that brings that allergen is approved here — with a large warning that they
+      <b>must tell their server</b>. If Procure Wizard later changes a part’s allergens, its approval is suspended automatically until someone re-approves it.
+    </div>
+    <div id="list"></div>
+  </main>
+</div>
+<div id="toast"></div>
+
+<script type="module">
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm';
+
+const SUPABASE_URL = 'https://zeercurbhqcxwgjmxahg.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_z1NMvndK1vpoGDLtiQe1PA_pSBSMncl'; // public key: data is protected by row-level security
+const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const short = (a) => (a === 'Cereals containing gluten' ? 'Gluten' : a);
+const sortU = (a) => [...new Set(a || [])].filter(Boolean).sort();
+// Must match swapFingerprint in supabase/functions/_shared/procureWizard.ts exactly.
+const fingerprint = (c, to) => JSON.stringify([c ? [sortU(c.contains), sortU(c.may_contain), !!c.unknown] : null, to ? [sortU(to.contains), sortU(to.may_contain), !!to.unknown] : null]);
+const toast = (msg) => { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => (t.style.display = 'none'), 3500); };
+
+let S = { dishes: [], swaps: [], comps: [], user: null, open: new Set() };
+
+async function all(table, select, build = (q) => q) {
+  const out = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await build(sb.from(table).select(select)).range(from, from + 999);
+    if (error) throw error;
+    out.push(...data);
+    if (data.length < 1000) return out;
+  }
+}
+
+async function load() {
+  try {
+    const [dishes, swaps, comps, runs] = await Promise.all([
+      all('allergen_dish', '*', (q) => q.eq('active', true).order('category').order('name')),
+      all('allergen_swap', '*'),
+      all('allergen_component', 'key,type,name,contains,may_contain,unknown', (q) => q.order('name')),
+      sb.from('allergen_sync_run').select('*').order('started_at', { ascending: false }).limit(1)
+    ]);
+    S.dishes = dishes; S.swaps = swaps; S.comps = comps;
+    const r = runs.data?.[0];
+    $('syncInfo').textContent = 'From Procure Wizard every 15 minutes · ' + (!r ? 'not synced yet'
+      : r.ok ? `last sync ${new Date(r.finished_at || r.started_at).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' })} (${r.dishes} dishes${r.complete ? '' : ', partial — continues next run'})`
+      : r.finished_at ? `last sync failed: ${r.error || 'unknown error'}` : 'sync running…');
+    render();
+  } catch (e) {
+    $('list').innerHTML = `<p class="flag">Could not load: ${esc(e.message)}. If you have just signed in, ask for your email to be added to allergen_admin.</p>`;
+  }
+}
+
+const usage = () => { const m = new Map(); for (const d of S.dishes) for (const c of d.components || []) m.set(c.key, (m.get(c.key) || 0) + 1); return m; };
+
+function compHtml(d, c, used) {
+  const sw = S.swaps.find((s) => s.pw_dish_id === d.pw_dish_id && s.component_key === c.key);
+  const suspended = sw && sw.status === 'suspended';
+  const chips = (c.contains || []).map((a) => `<span class="chip">${esc(short(a))}</span>`).join('') + (c.may_contain || []).map((a) => `<span class="chip may">May: ${esc(short(a))}</span>`).join('');
+  const status = sw ? `<span class="pill ${suspended ? 'p-warn' : 'p-ok'}">${suspended ? 'Suspended' : sw.action === 'remove' ? 'Can be left off' : 'Swap → ' + esc(sw.swap_to_name)}</span>` : '';
+  const opts = S.comps.filter((x) => x.key !== c.key && !x.unknown).map((x) => `<option value="${esc(x.key)}" ${sw?.swap_to_key === x.key ? 'selected' : ''}>${esc(x.name)} — ${x.contains.length ? 'contains ' + esc(x.contains.map(short).join(', ')) : 'no allergens'}</option>`).join('');
+  const id = `${d.pw_dish_id}|${c.key}`;
+  return `<div class="comp ${suspended ? 'suspended' : ''}">
+    <div><b>${esc(c.name)}</b> <span class="muted">· ${esc(c.type)} · ${esc(c.qty)}</span>${status}</div>
+    <div class="chips">${chips || '<span class="muted">No allergens</span>'}${c.unknown ? '<span class="chip may">Missing allergen data in Procure Wizard</span>' : ''}</div>
+    ${(c.sources || []).length ? `<div class="src">${c.sources.map((s) => `${esc(s.path)}: ${esc(s.contains.map(short).join(', '))}`).join('<br>')}</div>` : ''}
+    ${suspended ? `<div class="flag" style="margin-top:6px">⚠ ${esc(sw.suspended_reason)}</div>` : ''}
+    ${(c.contains || []).length ? `<div class="approve" data-id="${esc(id)}">
+      <div class="row"><span class="muted">For a guest with an allergy, the kitchen can:</span>
+        <select class="act"><option value="">Not change it</option><option value="remove" ${sw?.action === 'remove' ? 'selected' : ''}>Leave it off</option><option value="swap" ${sw?.action === 'swap' ? 'selected' : ''}>Swap it for…</option></select>
+        <select class="to" ${sw?.action === 'swap' ? '' : 'hidden'}><option value="">Choose a replacement</option>${opts}</select></div>
+      <input type="text" class="note" placeholder="Note for guests and staff (optional), e.g. served with fries instead" value="${esc(sw?.note || '')}">
+      <div class="row">
+        <button class="small primary do-approve">${sw ? 'Re-approve' : 'Approve'}</button>
+        ${used > 1 ? `<button class="small do-all">Approve for all ${used} dishes with this</button>` : ''}
+        ${sw ? '<button class="small do-remove">Remove approval</button>' : ''}
+      </div></div>` : ''}
+  </div>`;
+}
+
+function render() {
+  const term = $('search').value.trim().toLowerCase();
+  const view = $('view').value;
+  const used = usage();
+  const suspendedDish = new Set(S.swaps.filter((s) => s.status === 'suspended').map((s) => s.pw_dish_id));
+  const shown = S.dishes.filter((d) => {
+    if (term && !`${d.name} ${d.display_name || ''} ${(d.components || []).map((c) => c.name).join(' ')}`.toLowerCase().includes(term)) return false;
+    if (view === 'website') return d.website_visible;
+    if (view === 'check') return d.discrepancies.length || d.has_unknown || suspendedDish.has(d.pw_dish_id);
+    if (view === 'approved') return S.swaps.some((s) => s.pw_dish_id === d.pw_dish_id);
+    return true;
+  });
+  if (!S.dishes.length) { $('list').innerHTML = '<p class="muted">No dishes yet — the first sync fills this in (press Sync now, or wait up to 15 minutes).</p>'; return; }
+  let html = '', section = null;
+  for (const d of shown) {
+    if ((d.category || 'Other') !== section) { section = d.category || 'Other'; html += `<div class="section">${esc(section)}</div>`; }
+    const ds = S.swaps.filter((s) => s.pw_dish_id === d.pw_dish_id);
+    const susp = ds.filter((s) => s.status === 'suspended').length;
+    const flags = d.discrepancies.length + (d.has_unknown ? 1 : 0) + susp;
+    html += `<details class="dish" data-dish="${esc(d.pw_dish_id)}" ${S.open.has(d.pw_dish_id) ? 'open' : ''}>
+      <summary><span class="name">${esc(d.display_name || d.name)}</span>
+        ${d.website_visible ? '<span class="pill p-web">On website</span>' : ''}
+        ${ds.length - susp ? `<span class="pill p-ok">${ds.length - susp} approved</span>` : ''}
+        ${flags ? `<span class="pill p-warn">${flags} to check</span>` : ''}
+        <div class="chips">${d.contains.map((a) => `<span class="chip">${esc(short(a))}</span>`).join('')}</div></summary>
+      <div class="body">
+        ${d.discrepancies.map((x) => `<div class="flag">⚠ ${esc(x)}</div>`).join('')}
+        ${d.has_unknown ? '<div class="flag">⚠ A part of this dish has no allergen data in Procure Wizard, so the website never offers changes for it until that is filled in.</div>' : ''}
+        ${(d.components || []).map((c) => compHtml(d, c, used.get(c.key) || 1)).join('')}
+        <div class="settings">
+          <label class="full"><input type="checkbox" class="web" ${d.website_visible ? 'checked' : ''}> Show on the website allergen menu</label>
+          <input type="text" class="dname" placeholder="Name on website (default: ${esc((d.ingredifind_names || [])[0] || d.name)})" value="${esc(d.display_name || '')}">
+          <input type="text" class="igf" placeholder="IngrediFind dish name(s), comma separated" value="${esc((d.ingredifind_names || []).join(', '))}">
+          <input type="text" class="desc full" placeholder="Description on website" value="${esc(d.description || '')}">
+          <div class="full"><button class="small save-dish">Save website details</button></div>
+        </div>
+      </div></details>`;
+  }
+  $('list').innerHTML = html || '<p class="muted">No dish matches.</p>';
+}
+
+function rowFor(d, c, action, to, note) {
+  return {
+    pw_dish_id: d.pw_dish_id, dish_name: d.name, component_key: c.key, component_name: c.name, action,
+    swap_to_key: action === 'swap' ? to.key : null, swap_to_name: action === 'swap' ? to.name : null, note: note || null,
+    approved_fingerprint: fingerprint(c, action === 'swap' ? to : null), status: 'active', suspended_reason: null,
+    approved_by: S.user?.email || '', approved_at: new Date().toISOString()
+  };
+}
+
+async function approve(dishes, key, action, toKey, note) {
+  const to = S.comps.find((x) => x.key === toKey);
+  if (action === 'swap' && !to) return toast('Choose what to swap it for.');
+  const rows = dishes.map((d) => rowFor(d, d.components.find((c) => c.key === key), action, to, note));
+  const { error } = await sb.from('allergen_swap').upsert(rows, { onConflict: 'pw_dish_id,component_key' });
+  if (error) return toast('Could not save: ' + error.message);
+  toast(`Approved on ${rows.length} dish${rows.length === 1 ? '' : 'es'}`);
+  await load();
+}
+
+$('list').addEventListener('toggle', (e) => {
+  const d = e.target.closest?.('details.dish');
+  if (d) d.open ? S.open.add(d.dataset.dish) : S.open.delete(d.dataset.dish);
+}, true);
+
+$('list').addEventListener('change', (e) => {
+  if (e.target.classList.contains('act')) e.target.closest('.approve').querySelector('.to').hidden = e.target.value !== 'swap';
+});
+
+$('list').addEventListener('click', async (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  const dishEl = btn.closest('details.dish');
+  const dish = S.dishes.find((d) => d.pw_dish_id === dishEl?.dataset.dish);
+  if (!dish) return;
+  if (btn.classList.contains('save-dish')) {
+    const box = btn.closest('.settings');
+    const patch = {
+      website_visible: box.querySelector('.web').checked,
+      display_name: box.querySelector('.dname').value.trim() || null,
+      description: box.querySelector('.desc').value.trim() || null,
+      ingredifind_names: box.querySelector('.igf').value.split(',').map((s) => s.trim()).filter(Boolean)
+    };
+    const { error } = await sb.from('allergen_dish').update(patch).eq('pw_dish_id', dish.pw_dish_id);
+    toast(error ? 'Could not save: ' + error.message : 'Saved');
+    if (!error) load();
+    return;
+  }
+  const box = btn.closest('.approve');
+  if (!box) return;
+  const key = box.dataset.id.split('|').slice(1).join('|');
+  const action = box.querySelector('.act').value;
+  const toKey = box.querySelector('.to').value;
+  const note = box.querySelector('.note').value.trim();
+  if (btn.classList.contains('do-remove')) {
+    const sw = S.swaps.find((s) => s.pw_dish_id === dish.pw_dish_id && s.component_key === key);
+    const { error } = await sb.from('allergen_swap').delete().eq('id', sw.id);
+    toast(error ? 'Could not remove: ' + error.message : 'Approval removed');
+    return load();
+  }
+  if (!action) return toast('Choose “Leave it off” or “Swap it for…” first.');
+  if (btn.classList.contains('do-approve')) return approve([dish], key, action, toKey, note);
+  if (btn.classList.contains('do-all')) {
+    const these = S.dishes.filter((d) => (d.components || []).some((c) => c.key === key));
+    const name = dish.components.find((c) => c.key === key)?.name;
+    if (confirm(`${action === 'remove' ? 'Leave off' : 'Swap'} “${name}” on all ${these.length} dishes that have it?`)) return approve(these, key, action, toKey, note);
+  }
+});
+
+$('search').addEventListener('input', render);
+$('view').addEventListener('change', render);
+
+$('syncNow').addEventListener('click', async () => {
+  const b = $('syncNow'); b.disabled = true; b.textContent = 'Syncing… (up to 2 min)';
+  try {
+    const { data: { session } } = await sb.auth.getSession();
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/pw-sync`, { method: 'POST', headers: { authorization: `Bearer ${session.access_token}`, 'content-type': 'application/json' }, body: '{}' });
+    const j = await r.json();
+    toast(j.ok ? `Synced ${j.dishes} of ${j.menu_size} dishes in ${j.seconds}s${j.complete ? '' : ' — the rest follow in the next run'}` : 'Sync failed: ' + j.error);
+  } catch (e) { toast('Sync failed: ' + e.message); }
+  b.disabled = false; b.textContent = 'Sync now';
+  load();
+});
+
+$('signin').addEventListener('click', async () => {
+  $('loginMsg').textContent = 'Signing in…';
+  const { error } = await sb.auth.signInWithPassword({ email: $('email').value.trim(), password: $('password').value });
+  $('loginMsg').textContent = error ? error.message : '';
+});
+$('signout').addEventListener('click', () => sb.auth.signOut());
+
+sb.auth.onAuthStateChange((_e, session) => {
+  S.user = session?.user || null;
+  $('login').hidden = !!S.user;
+  $('app').hidden = !S.user;
+  if (S.user) load();
+});
+</script>
+</body>
+</html>
