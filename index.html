@@ -40,6 +40,15 @@
   .settings { background:#faf7f4; border-radius:8px; padding:10px; display:grid; gap:8px; grid-template-columns:1fr 1fr; }
   .settings .full { grid-column:1 / -1; }
   [hidden] { display:none !important; }
+  .mb-tabs { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 10px; }
+  .mb-menu { background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px; margin:0 0 12px; display:grid; gap:8px; }
+  .mb-section { background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px; margin:0 0 12px; display:grid; gap:8px; }
+  .mb-item { border-top:1px solid var(--line); padding-top:8px; display:grid; gap:6px; }
+  .mb-item.mb-hidden { opacity:.5; }
+  .mb-picker, .mb-add { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .mb-picker select, .mb-add select { flex:1; min-width:180px; }
+  .mb-add { border-top:1px dashed var(--line); padding-top:8px; }
+  .chip .x { border:0; background:none; cursor:pointer; padding:0 2px; font-size:14px; }
   .swap-pick { display:grid; gap:6px; margin:6px 0; }
   .swap-pick label { display:flex; gap:6px; align-items:center; font-size:13px; }
   .swap-pick select { width:100%; }
@@ -84,7 +93,9 @@
     <div class="row" style="margin-top:10px">
       <input id="search" type="text" placeholder="Search a dish or part…" style="flex:1;min-width:180px">
       <select id="view">
+        <option value="menus">Menus (build the website menu)</option>
         <option value="website">On the website</option>
+        <option value="ingredients">By ingredient (approve once, every dish)</option>
         <option value="check">Needs checking</option>
         <option value="approved">Has approved changes</option>
         <option value="all">Every Procure Wizard dish</option>
@@ -93,9 +104,10 @@
   </header>
   <main>
     <div class="notice">
-      Only approve a change the kitchen can <b>always</b> make. When a guest picks an allergen on the website, a dish shows as
-      <b>“Suitable with changes”</b> only if every part that brings that allergen is approved here — with a large warning that they
-      <b>must tell their server</b>. If Procure Wizard later changes a part’s allergens, its approval is suspended automatically until someone re-approves it.
+      Approvals belong to the <b>ingredient</b>: approve “leave off the coleslaw” once and it applies to <b>every dish with coleslaw</b>,
+      including dishes added later. Only approve a change the kitchen can <b>always</b> make. A dish shows as <b>“Suitable with changes”</b>
+      only if every ingredient that brings the guest’s allergen is approved — with a large warning that they <b>must tell their server</b>.
+      If Procure Wizard later changes an ingredient’s allergens, its approval is suspended automatically until someone re-approves it.
     </div>
     <div id="list"></div>
   </main>
@@ -120,7 +132,9 @@ const sortU = (a) => [...new Set(a || [])].filter(Boolean).sort();
 const fingerprint = (c, to) => JSON.stringify([c ? [sortU(c.contains), sortU(c.may_contain), !!c.unknown] : null, to ? [sortU(to.contains), sortU(to.may_contain), !!to.unknown] : null]);
 const toast = (msg) => { const t = $('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => (t.style.display = 'none'), 3500); };
 
-let S = { dishes: [], swaps: [], comps: [], user: null, open: new Set() };
+let S = { dishes: [], rules: [], comps: [], menus: [], sections: [], items: [], menuSel: null, user: null, open: new Set() };
+const ruleFor = (key) => S.rules.find((r) => r.component_key === key);
+const catalogue = (key) => S.comps.find((x) => x.key === key);
 
 async function all(table, select, build = (q) => q) {
   const out = [];
@@ -134,13 +148,16 @@ async function all(table, select, build = (q) => q) {
 
 async function load() {
   try {
-    const [dishes, swaps, comps, runs] = await Promise.all([
+    const [dishes, rules, comps, runs, menus, sections, items] = await Promise.all([
       all('allergen_dish', '*', (q) => q.eq('active', true).order('category').order('name')),
-      all('allergen_swap', '*'),
+      all('allergen_part_rule', '*'),
       all('allergen_component', 'key,type,name,guest_name,ignored,contains,may_contain,unknown', (q) => q.order('name')),
-      sb.from('allergen_sync_run').select('*').order('started_at', { ascending: false }).limit(1)
+      sb.from('allergen_sync_run').select('*').order('started_at', { ascending: false }).limit(1),
+      all('allergen_menu', '*', (q) => q.order('sort')),
+      all('allergen_menu_section', '*', (q) => q.order('sort')),
+      all('allergen_menu_item', '*', (q) => q.order('sort'))
     ]);
-    S.dishes = dishes; S.swaps = swaps; S.comps = comps;
+    S.dishes = dishes; S.rules = rules; S.comps = comps; S.menus = menus; S.sections = sections; S.items = items;
     const r = runs.data?.[0];
     $('syncInfo').textContent = 'From Procure Wizard every 15 minutes · ' + (!r ? 'not synced yet'
       : r.ok ? `last sync ${new Date(r.finished_at || r.started_at).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' })} (${r.dishes} dishes${r.complete ? '' : ', partial — continues next run'})`
@@ -170,23 +187,23 @@ function compHtml(d, c, used) {
     return `<div class="comp"><div><b>${esc(c.name)}</b> <span class="muted">· ${esc(c.type)} · ${esc(c.qty)}</span><span class="pill p-warn">Ignored on website</span></div>
       <div class="muted">Not part of what the guest eats, so its allergens aren't shown on the website menu.</div></div>`;
   }
-  const sw =S.swaps.find((s) => s.pw_dish_id === d.pw_dish_id && s.component_key === c.key);
+  // Approvals are per ingredient: the same rule shows (and applies) on every dish that has this ingredient.
+  const sw = ruleFor(c.key);
   const suspended = sw && sw.status === 'suspended';
   const chips = (c.contains || []).map((a) => `<span class="chip">${esc(short(a))}</span>`).join('') + (c.may_contain || []).map((a) => `<span class="chip may">May: ${esc(short(a))}</span>`).join('');
   const status = sw ? `<span class="pill ${suspended ? 'p-warn' : 'p-ok'}">${suspended ? 'Suspended' : sw.action === 'remove' ? 'Can be left off' : 'Swap → ' + esc(sw.swap_to_name)}</span>` : '';
   const opts = swapOptions(c, sw?.swap_to_key, '', true);
-  const id = `${d.pw_dish_id}|${c.key}`;
   const freeOf = (c.contains || []).map(short).join(', ');
   return `<div class="comp ${suspended ? 'suspended' : ''}">
-    <div><b>${esc(c.name)}</b> <span class="muted">· ${esc(c.type)} · ${esc(c.qty)}</span>${status}</div>
+    <div><b>${esc(c.name)}</b> <span class="muted">· ${esc(c.type)}${c.qty ? ' · ' + esc(c.qty) : ''} · in ${used} dish${used === 1 ? '' : 'es'}</span>${status}</div>
     <div class="chips">${chips || '<span class="muted">No allergens</span>'}${c.unknown ? '<span class="chip may">Missing allergen data in Procure Wizard</span>' : ''}</div>
     ${(c.contains || []).length ? `<div class="row guest" data-key="${esc(c.key)}"><span class="muted">Guests see it as:</span>
       <input type="text" class="gname" placeholder="Plain name, no brands — e.g. Mayonnaise" value="${esc(S.comps.find((x) => x.key === c.key)?.guest_name || '')}">
       <button class="small save-guest">Save name</button></div>` : ''}
     ${(c.sources || []).length ? `<div class="src">${c.sources.map((s) => `${esc(s.path)}: ${esc(s.contains.map(short).join(', '))}`).join('<br>')}</div>` : ''}
     ${suspended ? `<div class="flag" style="margin-top:6px">⚠ ${esc(sw.suspended_reason)}</div>` : ''}
-    ${(c.contains || []).length ? `<div class="approve" data-id="${esc(id)}">
-      <div class="row"><span class="muted">For a guest with an allergy, the kitchen can:</span>
+    ${(c.contains || []).length ? `<div class="approve" data-key="${esc(c.key)}">
+      <div class="row"><span class="muted">On <b>every</b> dish with this ingredient, for a guest with an allergy, the kitchen can:</span>
         <select class="act"><option value="">Not change it</option><option value="remove" ${sw?.action === 'remove' ? 'selected' : ''}>Leave it off</option><option value="swap" ${sw?.action === 'swap' ? 'selected' : ''}>Swap it for…</option></select>
       </div>
       <div class="swap-pick" ${sw?.action === 'swap' ? '' : 'hidden'}>
@@ -196,31 +213,206 @@ function compHtml(d, c, used) {
       </div>
       <input type="text" class="note" placeholder="Note for guests and staff (optional), e.g. served with fries instead" value="${esc(sw?.note || '')}">
       <div class="row">
-        <button class="small primary do-approve">${sw ? 'Re-approve' : 'Approve'}</button>
-        ${used > 1 ? `<button class="small do-all">Approve for all ${used} dishes with this</button>` : ''}
+        <button class="small primary do-approve">${sw ? 'Re-approve' : 'Approve'} for all ${used} dish${used === 1 ? '' : 'es'}</button>
         ${sw ? '<button class="small do-remove">Remove approval</button>' : ''}
       </div></div>` : ''}
   </div>`;
 }
 
+// ---------------------------------------------------------------- menu builder
+// Menus → sections → dishes, in the order guests see them on the website. Each dish links to one or more
+// Procure Wizard dishes for its allergens (several = variants, strictest wins). Unlinked = "ask your server".
+const pwName = (id) => { const d = S.dishes.find((x) => x.pw_dish_id === id); return d ? d.name : `${id} (no longer on the menu)`; };
+function dishOptions(term, exclude = []) {
+  const words = String(term || '').toLowerCase().split(/\s+/).filter(Boolean);
+  const list = S.dishes.filter((d) => !exclude.includes(d.pw_dish_id) && words.every((w) => `${d.name} ${(d.ingredifind_names || []).join(' ')} ${d.category || ''}`.toLowerCase().includes(w)))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return `<option value="">${list.length ? `Choose a Procure Wizard dish (${list.length})` : 'No matches — try another word'}</option>` +
+    list.slice(0, 300).map((d) => `<option value="${esc(d.pw_dish_id)}">${esc(d.name)} — ${esc(d.category || '')}</option>`).join('');
+}
+function renderMenus() {
+  if (!S.menus.length) {
+    $('list').innerHTML = `<div class="notice">No menus yet.</div><button class="primary" data-mb="add-menu">+ New menu</button>`;
+    return;
+  }
+  if (!S.menus.some((m) => m.id === S.menuSel)) S.menuSel = S.menus[0].id;
+  const m = S.menus.find((x) => x.id === S.menuSel);
+  const secs = S.sections.filter((s) => s.menu_id === m.id).sort((a, b) => a.sort - b.sort);
+  const term = $('search').value.trim().toLowerCase();
+  const unlinkedAll = S.items.filter((i) => secs.some((s) => s.id === i.section_id) && !i.hidden && !(i.pw_dish_ids || []).length).length;
+  let html = `<div class="mb-tabs">${S.menus.map((x) => `<button class="${x.id === m.id ? 'primary' : ''}" data-mb="pick-menu" data-id="${x.id}">${esc(x.name)}${x.active ? '' : ' (hidden)'}</button>`).join('')}
+      <button class="small" data-mb="add-menu">+ New menu</button></div>
+    <div class="mb-menu">
+      <div class="row"><input type="text" class="mb-menu-name" value="${esc(m.name)}" style="flex:1;min-width:160px" data-id="${m.id}">
+        <label class="muted"><input type="checkbox" data-mb="menu-active" data-id="${m.id}" ${m.active ? 'checked' : ''}> Show on website</label>
+        <button class="small" data-mb="move-menu" data-dir="-1" data-id="${m.id}" title="Move tab left">◀</button>
+        <button class="small" data-mb="move-menu" data-dir="1" data-id="${m.id}" title="Move tab right">▶</button>
+        <button class="small" data-mb="del-menu" data-id="${m.id}">Delete menu</button></div>
+      ${unlinkedAll ? `<div class="flag">⚠ ${unlinkedAll} dish${unlinkedAll === 1 ? ' isn’t' : 'es aren’t'} linked to Procure Wizard yet, so guests are told to ask their server about ${unlinkedAll === 1 ? 'it' : 'them'}. Use “Link” to connect each one.</div>` : ''}
+    </div>`;
+  for (const [si, s] of secs.entries()) {
+    const items = S.items.filter((i) => i.section_id === s.id).sort((a, b) => a.sort - b.sort)
+      .filter((i) => !term || `${i.name} ${i.description || ''} ${(i.pw_dish_ids || []).map(pwName).join(' ')}`.toLowerCase().includes(term));
+    html += `<div class="mb-section" data-sec="${s.id}">
+      <div class="row"><input type="text" class="mb-sec-name" value="${esc(s.name)}" data-id="${s.id}" style="flex:1;min-width:160px;font-weight:650">
+        <button class="small" data-mb="move-sec" data-dir="-1" data-id="${s.id}" ${si === 0 ? 'disabled' : ''}>▲</button>
+        <button class="small" data-mb="move-sec" data-dir="1" data-id="${s.id}" ${si === secs.length - 1 ? 'disabled' : ''}>▼</button>
+        <button class="small" data-mb="del-sec" data-id="${s.id}">Delete section</button></div>
+      ${items.map((i, ii) => `<div class="mb-item ${i.hidden ? 'mb-hidden' : ''}" data-item="${i.id}">
+        <div class="row">
+          <button class="small" data-mb="move-item" data-dir="-1" data-id="${i.id}" ${ii === 0 || term ? 'disabled' : ''}>▲</button>
+          <button class="small" data-mb="move-item" data-dir="1" data-id="${i.id}" ${ii === items.length - 1 || term ? 'disabled' : ''}>▼</button>
+          <input type="text" class="mb-item-name" value="${esc(i.name)}" data-id="${i.id}" style="flex:1;min-width:150px">
+          <button class="small" data-mb="hide-item" data-id="${i.id}">${i.hidden ? 'Show' : 'Hide'}</button>
+          <button class="small" data-mb="del-item" data-id="${i.id}">Remove</button>
+        </div>
+        <input type="text" class="mb-item-desc" value="${esc(i.description || '')}" data-id="${i.id}" placeholder="Description guests see (optional)">
+        <div class="chips">${(i.pw_dish_ids || []).length
+          ? i.pw_dish_ids.map((id) => `<span class="chip">Allergens from: ${esc(pwName(id))} <button class="x" data-mb="unlink" data-id="${i.id}" data-pw="${esc(id)}" title="Unlink">×</button></span>`).join('')
+          : '<span class="chip may">⚠ Not linked to Procure Wizard — guests are told to ask</span>'}
+          <button class="small" data-mb="show-link" data-id="${i.id}">${(i.pw_dish_ids || []).length ? '+ Link another version' : 'Link'}</button></div>
+        <div class="mb-picker" data-for="${i.id}" hidden>
+          <input type="search" class="mb-pick-search" placeholder="Search Procure Wizard dishes…" autocomplete="off">
+          <select class="mb-pick">${dishOptions('', i.pw_dish_ids || [])}</select>
+          <button class="small primary" data-mb="link" data-id="${i.id}">Link</button>
+        </div>
+      </div>`).join('')}
+      <div class="mb-add">
+        <input type="search" class="mb-pick-search" placeholder="Add a dish: search Procure Wizard…" autocomplete="off">
+        <select class="mb-pick">${dishOptions('')}</select>
+        <button class="small primary" data-mb="add-item" data-id="${s.id}">+ Add dish</button>
+        <button class="small" data-mb="add-blank" data-id="${s.id}">+ Add without a link</button>
+      </div>
+    </div>`;
+  }
+  html += `<button class="small" data-mb="add-sec" data-id="${m.id}">+ Add section</button>`;
+  $('list').innerHTML = html;
+}
+
+async function mbSave(table, id, patch, msg = 'Saved') {
+  const { error } = await sb.from(table).update(patch).eq('id', id);
+  toast(error ? 'Could not save: ' + error.message : msg);
+  if (!error) await load();
+  return !error;
+}
+async function mbMove(table, rows, id, dir) {
+  const i = rows.findIndex((r) => r.id === id), j = i + dir;
+  if (i < 0 || j < 0 || j >= rows.length) return;
+  [rows[i], rows[j]] = [rows[j], rows[i]];
+  for (const [k, r] of rows.entries()) if (r.sort !== k) await sb.from(table).update({ sort: k }).eq('id', r.id);
+  await load();
+}
+$('list').addEventListener('change', async (e) => {
+  const t = e.target;
+  if (t.classList.contains('mb-menu-name') && t.value.trim()) return mbSave('allergen_menu', t.dataset.id, { name: t.value.trim() }, 'Menu renamed');
+  if (t.classList.contains('mb-sec-name') && t.value.trim()) return mbSave('allergen_menu_section', t.dataset.id, { name: t.value.trim() }, 'Section renamed');
+  if (t.classList.contains('mb-item-name') && t.value.trim()) return mbSave('allergen_menu_item', t.dataset.id, { name: t.value.trim() }, 'Dish renamed');
+  if (t.classList.contains('mb-item-desc')) return mbSave('allergen_menu_item', t.dataset.id, { description: t.value.trim() || null }, 'Description saved');
+  if (t.dataset.mb === 'menu-active') return mbSave('allergen_menu', t.dataset.id, { active: t.checked }, t.checked ? 'Menu shown on the website' : 'Menu hidden from the website');
+});
+$('list').addEventListener('input', (e) => {
+  if (!e.target.classList.contains('mb-pick-search')) return;
+  const box = e.target.parentElement;
+  const item = S.items.find((i) => i.id === box.dataset.for);
+  box.querySelector('.mb-pick').innerHTML = dishOptions(e.target.value, item?.pw_dish_ids || []);
+});
+$('list').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-mb]');
+  if (!b || b.type === 'checkbox') return;
+  const id = b.dataset.id, a = b.dataset.mb;
+  const item = S.items.find((i) => i.id === id);
+  if (a === 'pick-menu') { S.menuSel = id; return renderMenus(); }
+  if (a === 'add-menu') {
+    const name = prompt('Name of the new menu (e.g. Desserts)');
+    if (!name?.trim()) return;
+    const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '-' + Math.random().toString(36).slice(2, 6);
+    const { data, error } = await sb.from('allergen_menu').insert({ name: name.trim(), slug, sort: S.menus.length }).select('id').single();
+    if (error) return toast('Could not add: ' + error.message);
+    S.menuSel = data.id; return load();
+  }
+  if (a === 'del-menu') {
+    const m = S.menus.find((x) => x.id === id);
+    if (!confirm(`Delete the whole “${m.name}” menu with all its sections and dishes? (Untick “Show on website” instead to just hide it.)`)) return;
+    const { error } = await sb.from('allergen_menu').delete().eq('id', id);
+    toast(error ? 'Could not delete: ' + error.message : 'Menu deleted'); return load();
+  }
+  if (a === 'move-menu') return mbMove('allergen_menu', [...S.menus].sort((x, y) => x.sort - y.sort), id, Number(b.dataset.dir));
+  if (a === 'add-sec') {
+    const name = prompt('Section name (e.g. Burgers)');
+    if (!name?.trim()) return;
+    const { error } = await sb.from('allergen_menu_section').insert({ menu_id: id, name: name.trim(), sort: S.sections.filter((s) => s.menu_id === id).length });
+    toast(error ? 'Could not add: ' + error.message : 'Section added'); return load();
+  }
+  if (a === 'del-sec') {
+    const s = S.sections.find((x) => x.id === id);
+    if (!confirm(`Delete the “${s.name}” section and all its dishes?`)) return;
+    const { error } = await sb.from('allergen_menu_section').delete().eq('id', id);
+    toast(error ? 'Could not delete: ' + error.message : 'Section deleted'); return load();
+  }
+  if (a === 'move-sec') { const s = S.sections.find((x) => x.id === id); return mbMove('allergen_menu_section', S.sections.filter((x) => x.menu_id === s.menu_id).sort((x, y) => x.sort - y.sort), id, Number(b.dataset.dir)); }
+  if (a === 'move-item') return mbMove('allergen_menu_item', S.items.filter((x) => x.section_id === item.section_id).sort((x, y) => x.sort - y.sort), id, Number(b.dataset.dir));
+  if (a === 'hide-item') return mbSave('allergen_menu_item', id, { hidden: !item.hidden }, item.hidden ? 'Dish shown on the website' : 'Dish hidden from the website');
+  if (a === 'del-item') {
+    if (!confirm(`Remove “${item.name}” from this menu?`)) return;
+    const { error } = await sb.from('allergen_menu_item').delete().eq('id', id);
+    toast(error ? 'Could not remove: ' + error.message : 'Dish removed'); return load();
+  }
+  if (a === 'show-link') { const p = document.querySelector(`.mb-picker[data-for="${id}"]`); p.hidden = !p.hidden; if (!p.hidden) p.querySelector('input').focus(); return; }
+  if (a === 'link') {
+    const pw = b.parentElement.querySelector('.mb-pick').value;
+    if (!pw) return toast('Choose a Procure Wizard dish first.');
+    return mbSave('allergen_menu_item', id, { pw_dish_ids: [...new Set([...(item.pw_dish_ids || []), pw])] }, `Linked to ${pwName(pw)}`);
+  }
+  if (a === 'unlink') {
+    if (!confirm(`Stop using “${pwName(b.dataset.pw)}” for this dish’s allergens?`)) return;
+    return mbSave('allergen_menu_item', id, { pw_dish_ids: (item.pw_dish_ids || []).filter((x) => x !== b.dataset.pw) }, 'Unlinked');
+  }
+  if (a === 'add-item' || a === 'add-blank') {
+    const box = b.parentElement;
+    const pw = a === 'add-item' ? box.querySelector('.mb-pick').value : '';
+    if (a === 'add-item' && !pw) return toast('Choose a Procure Wizard dish first (or use “Add without a link”).');
+    const d = S.dishes.find((x) => x.pw_dish_id === pw);
+    const name = d ? (d.display_name || (d.ingredifind_names || [])[0] || d.name) : prompt('Dish name as guests see it');
+    if (!name?.trim()) return;
+    const { error } = await sb.from('allergen_menu_item').insert({ section_id: id, name: name.trim(), description: d?.description || null, pw_dish_ids: pw ? [pw] : [], sort: S.items.filter((x) => x.section_id === id).length });
+    toast(error ? 'Could not add: ' + error.message : `Added ${name.trim()}`); return load();
+  }
+});
+
 function render() {
   const term = $('search').value.trim().toLowerCase();
   const view = $('view').value;
+  if (view === 'menus') return renderMenus();
   const used = usage();
-  const suspendedDish = new Set(S.swaps.filter((s) => s.status === 'suspended').map((s) => s.pw_dish_id));
+  if (!S.dishes.length) { $('list').innerHTML = '<p class="muted">No dishes yet — the first sync fills this in (press Sync now, or wait up to 15 minutes).</p>'; return; }
+
+  // Ingredient view: every ingredient that brings an allergen, most-used first. One approval covers every dish.
+  if (view === 'ingredients') {
+    const onWeb = new Set(S.dishes.filter((d) => d.website_visible).flatMap((d) => (d.components || []).map((c) => c.key)));
+    const list = S.comps
+      .filter((c) => (c.contains || []).length && used.get(c.key) && !c.ignored && !/lolli|lolly/i.test(c.name))
+      .filter((c) => !term || `${c.name} ${c.guest_name || ''}`.toLowerCase().includes(term))
+      .sort((a, b) => (onWeb.has(b.key) - onWeb.has(a.key)) || (used.get(b.key) - used.get(a.key)) || a.name.localeCompare(b.name));
+    $('list').innerHTML = list.length
+      ? `<p class="muted">${list.length} ingredients bring allergens. Ones used on website dishes are listed first.</p>` +
+        list.map((c) => `<div class="dish ingredient">${onWeb.has(c.key) ? '<span class="pill p-web">On website dishes</span>' : ''}${compHtml(null, c, used.get(c.key))}</div>`).join('')
+      : '<p class="muted">No ingredient matches.</p>';
+    return;
+  }
+
+  const ruled = (d, status) => (d.components || []).filter((c) => ruleFor(c.key)?.status === status).length;
   const shown = S.dishes.filter((d) => {
     if (term && !`${d.name} ${d.display_name || ''} ${(d.components || []).map((c) => c.name).join(' ')}`.toLowerCase().includes(term)) return false;
     if (view === 'website') return d.website_visible;
-    if (view === 'check') return d.discrepancies.length || d.has_unknown || suspendedDish.has(d.pw_dish_id);
-    if (view === 'approved') return S.swaps.some((s) => s.pw_dish_id === d.pw_dish_id);
+    if (view === 'check') return d.discrepancies.length || d.has_unknown || ruled(d, 'suspended');
+    if (view === 'approved') return ruled(d, 'active') > 0;
     return true;
   });
-  if (!S.dishes.length) { $('list').innerHTML = '<p class="muted">No dishes yet — the first sync fills this in (press Sync now, or wait up to 15 minutes).</p>'; return; }
   let html = '', section = null;
   for (const d of shown) {
     if ((d.category || 'Other') !== section) { section = d.category || 'Other'; html += `<div class="section">${esc(section)}</div>`; }
-    const ds = S.swaps.filter((s) => s.pw_dish_id === d.pw_dish_id);
-    const susp = ds.filter((s) => s.status === 'suspended').length;
+    const susp = ruled(d, 'suspended');
+    const ds = { length: ruled(d, 'active') + susp };
     const flags = d.discrepancies.length + (d.has_unknown ? 1 : 0) + susp;
     html += `<details class="dish" data-dish="${esc(d.pw_dish_id)}" ${S.open.has(d.pw_dish_id) ? 'open' : ''}>
       <summary><span class="name">${esc(d.display_name || d.name)}</span>
@@ -244,22 +436,24 @@ function render() {
   $('list').innerHTML = html || '<p class="muted">No dish matches.</p>';
 }
 
-function rowFor(d, c, action, to, note) {
-  return {
-    pw_dish_id: d.pw_dish_id, dish_name: d.name, component_key: c.key, component_name: c.name, action,
+// One rule per ingredient. The fingerprint is taken from the ingredient's current allergens in Procure Wizard
+// (and the replacement's), so any later change there suspends it.
+async function approve(key, action, toKey, note) {
+  const c = catalogue(key);
+  const to = catalogue(toKey);
+  if (!c) return toast('That ingredient is no longer in Procure Wizard.');
+  if (action === 'swap' && !to) return toast('Choose what to swap it for.');
+  const n = usage().get(key) || 0;
+  const what = action === 'remove' ? `leaving off “${c.name}”` : `swapping “${c.name}” for “${to.name}”`;
+  if (!confirm(`Approve ${what} on every dish that has it (${n} now, plus any added later)?`)) return;
+  const { error } = await sb.from('allergen_part_rule').upsert({
+    component_key: c.key, component_name: c.name, action,
     swap_to_key: action === 'swap' ? to.key : null, swap_to_name: action === 'swap' ? to.name : null, note: note || null,
     approved_fingerprint: fingerprint(c, action === 'swap' ? to : null), status: 'active', suspended_reason: null,
     approved_by: S.user?.email || '', approved_at: new Date().toISOString()
-  };
-}
-
-async function approve(dishes, key, action, toKey, note) {
-  const to = S.comps.find((x) => x.key === toKey);
-  if (action === 'swap' && !to) return toast('Choose what to swap it for.');
-  const rows = dishes.map((d) => rowFor(d, d.components.find((c) => c.key === key), action, to, note));
-  const { error } = await sb.from('allergen_swap').upsert(rows, { onConflict: 'pw_dish_id,component_key' });
+  }, { onConflict: 'component_key' });
   if (error) return toast('Could not save: ' + error.message);
-  toast(`Approved on ${rows.length} dish${rows.length === 1 ? '' : 'es'}`);
+  toast(`Approved for ${c.name} on all ${n} dish${n === 1 ? '' : 'es'}`);
   await load();
 }
 
@@ -275,9 +469,7 @@ $('list').addEventListener('change', (e) => {
 
 // Typing in the replacement search narrows the list straight away (works on phones, unlike hiding options).
 function refreshSwapOptions(box) {
-  const dish = S.dishes.find((d) => d.pw_dish_id === box.closest('details.dish')?.dataset.dish);
-  const key = box.dataset.id.split('|').slice(1).join('|');
-  const c = dish?.components.find((x) => x.key === key);
+  const c = catalogue(box.dataset.key);
   if (!c) return;
   const sel = box.querySelector('.to');
   const keep = sel.value;
@@ -293,8 +485,7 @@ $('list').addEventListener('click', async (e) => {
   if (!btn) return;
   const dishEl = btn.closest('details.dish');
   const dish = S.dishes.find((d) => d.pw_dish_id === dishEl?.dataset.dish);
-  if (!dish) return;
-  if (btn.classList.contains('save-dish')) {
+  if (btn.classList.contains('save-dish') && dish) {
     const box = btn.closest('.settings');
     const patch = {
       website_visible: box.querySelector('.web').checked,
@@ -317,23 +508,18 @@ $('list').addEventListener('click', async (e) => {
   }
   const box = btn.closest('.approve');
   if (!box) return;
-  const key = box.dataset.id.split('|').slice(1).join('|');
+  const key = box.dataset.key;
   const action = box.querySelector('.act').value;
   const toKey = box.querySelector('.to').value;
   const note = box.querySelector('.note').value.trim();
   if (btn.classList.contains('do-remove')) {
-    const sw = S.swaps.find((s) => s.pw_dish_id === dish.pw_dish_id && s.component_key === key);
-    const { error } = await sb.from('allergen_swap').delete().eq('id', sw.id);
-    toast(error ? 'Could not remove: ' + error.message : 'Approval removed');
+    if (!confirm(`Remove the approval for “${catalogue(key)?.name || key}” on every dish?`)) return;
+    const { error } = await sb.from('allergen_part_rule').delete().eq('component_key', key);
+    toast(error ? 'Could not remove: ' + error.message : 'Approval removed from every dish');
     return load();
   }
   if (!action) return toast('Choose “Leave it off” or “Swap it for…” first.');
-  if (btn.classList.contains('do-approve')) return approve([dish], key, action, toKey, note);
-  if (btn.classList.contains('do-all')) {
-    const these = S.dishes.filter((d) => (d.components || []).some((c) => c.key === key));
-    const name = dish.components.find((c) => c.key === key)?.name;
-    if (confirm(`${action === 'remove' ? 'Leave off' : 'Swap'} “${name}” on all ${these.length} dishes that have it?`)) return approve(these, key, action, toKey, note);
-  }
+  if (btn.classList.contains('do-approve')) return approve(key, action, toKey, note);
 });
 
 $('search').addEventListener('input', render);
