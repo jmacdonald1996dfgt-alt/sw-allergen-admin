@@ -63,6 +63,7 @@
   <input id="newPass" type="password" placeholder="New password" autocomplete="new-password">
   <input id="newPass2" type="password" placeholder="Type it again" autocomplete="new-password">
   <button class="primary" id="savePass">Save new password</button>
+  <button class="small" id="cancelPass" type="button">Cancel</button>
   <p class="muted" id="resetMsg"></p>
 </div>
 
@@ -74,6 +75,7 @@
         <div class="muted" id="syncInfo">Loading…</div>
       </div>
       <button id="syncNow">Sync now</button>
+      <button id="changePass" class="small">Change password</button>
       <button id="signout" class="small">Sign out</button>
     </div>
     <div class="row" style="margin-top:10px">
@@ -347,6 +349,9 @@ $('savePass').addEventListener('click', async () => {
   toast('Password changed — you’re signed in');
   show();
 });
+
+$('changePass').addEventListener('click', () => { recovering = true; $('resetMsg').textContent = ''; show(); $('newPass').focus(); });
+$('cancelPass').addEventListener('click', () => { recovering = false; history.replaceState(null, '', location.pathname); show(); });
 
 function show() {
   $('reset').hidden = !(recovering && S.user);
