@@ -40,6 +40,9 @@
   .settings { background:#faf7f4; border-radius:8px; padding:10px; display:grid; gap:8px; grid-template-columns:1fr 1fr; }
   .settings .full { grid-column:1 / -1; }
   [hidden] { display:none !important; }
+  .swap-pick { display:grid; gap:6px; margin:6px 0; }
+  .swap-pick label { display:flex; gap:6px; align-items:center; font-size:13px; }
+  .swap-pick select { width:100%; }
   #login, #reset { max-width:360px; margin:12vh auto; background:#fff; border:1px solid var(--line); border-radius:14px; padding:22px; display:grid; gap:10px; }
   #toast { position:fixed; left:50%; bottom:20px; transform:translateX(-50%); background:var(--ink); color:#fff; padding:10px 14px; border-radius:10px; font-size:14px; display:none; max-width:90vw; }
   @media (max-width:600px) { .settings { grid-template-columns:1fr; } }
@@ -150,6 +153,18 @@ async function load() {
 
 const usage = () => { const m = new Map(); for (const d of S.dishes) for (const c of d.components || []) m.set(c.key, (m.get(c.key) || 0) + 1); return m; };
 
+// Replacement choices for a part: searchable by Procure Wizard name or guest name, and (by default) only ones
+// that don't contain or "may contain" any allergen the part brings. The current choice always stays listed.
+function swapOptions(c, selectedKey, term, freeOnly) {
+  const words = String(term || '').toLowerCase().split(/\s+/).filter(Boolean);
+  const bad = c.contains || [];
+  const list = S.comps.filter((x) => x.key !== c.key && !x.unknown && (x.key === selectedKey || (
+    (!freeOnly || !bad.some((a) => (x.contains || []).includes(a) || (x.may_contain || []).includes(a))) &&
+    words.every((w) => `${x.name} ${x.guest_name || ''}`.toLowerCase().includes(w)))));
+  const head = `<option value="">${list.length ? `Choose a replacement (${list.length} match${list.length === 1 ? '' : 'es'})` : 'No matches — try another word'}</option>`;
+  return head + list.map((x) => `<option value="${esc(x.key)}" ${selectedKey === x.key ? 'selected' : ''}>${esc(x.name)}${x.guest_name && x.guest_name !== x.name ? ` (${esc(x.guest_name)})` : ''} — ${x.contains.length ? 'contains ' + esc(x.contains.map(short).join(', ')) : 'no allergens'}${(x.may_contain || []).length ? '; may contain ' + esc(x.may_contain.map(short).join(', ')) : ''}</option>`).join('');
+}
+
 function compHtml(d, c, used) {
   if (S.comps.find((x) => x.key === c.key)?.ignored || /lolli|lolly/i.test(c.name)) {
     return `<div class="comp"><div><b>${esc(c.name)}</b> <span class="muted">· ${esc(c.type)} · ${esc(c.qty)}</span><span class="pill p-warn">Ignored on website</span></div>
@@ -159,8 +174,9 @@ function compHtml(d, c, used) {
   const suspended = sw && sw.status === 'suspended';
   const chips = (c.contains || []).map((a) => `<span class="chip">${esc(short(a))}</span>`).join('') + (c.may_contain || []).map((a) => `<span class="chip may">May: ${esc(short(a))}</span>`).join('');
   const status = sw ? `<span class="pill ${suspended ? 'p-warn' : 'p-ok'}">${suspended ? 'Suspended' : sw.action === 'remove' ? 'Can be left off' : 'Swap → ' + esc(sw.swap_to_name)}</span>` : '';
-  const opts = S.comps.filter((x) => x.key !== c.key && !x.unknown).map((x) => `<option value="${esc(x.key)}" ${sw?.swap_to_key === x.key ? 'selected' : ''}>${esc(x.name)} — ${x.contains.length ? 'contains ' + esc(x.contains.map(short).join(', ')) : 'no allergens'}</option>`).join('');
+  const opts = swapOptions(c, sw?.swap_to_key, '', true);
   const id = `${d.pw_dish_id}|${c.key}`;
+  const freeOf = (c.contains || []).map(short).join(', ');
   return `<div class="comp ${suspended ? 'suspended' : ''}">
     <div><b>${esc(c.name)}</b> <span class="muted">· ${esc(c.type)} · ${esc(c.qty)}</span>${status}</div>
     <div class="chips">${chips || '<span class="muted">No allergens</span>'}${c.unknown ? '<span class="chip may">Missing allergen data in Procure Wizard</span>' : ''}</div>
@@ -172,7 +188,12 @@ function compHtml(d, c, used) {
     ${(c.contains || []).length ? `<div class="approve" data-id="${esc(id)}">
       <div class="row"><span class="muted">For a guest with an allergy, the kitchen can:</span>
         <select class="act"><option value="">Not change it</option><option value="remove" ${sw?.action === 'remove' ? 'selected' : ''}>Leave it off</option><option value="swap" ${sw?.action === 'swap' ? 'selected' : ''}>Swap it for…</option></select>
-        <select class="to" ${sw?.action === 'swap' ? '' : 'hidden'}><option value="">Choose a replacement</option>${opts}</select></div>
+      </div>
+      <div class="swap-pick" ${sw?.action === 'swap' ? '' : 'hidden'}>
+        <input type="search" class="to-search" placeholder="Search replacements, e.g. gluten free bun" autocomplete="off">
+        <label class="muted"><input type="checkbox" class="to-free" checked> Only show ones free from ${esc(freeOf)}</label>
+        <select class="to">${opts}</select>
+      </div>
       <input type="text" class="note" placeholder="Note for guests and staff (optional), e.g. served with fries instead" value="${esc(sw?.note || '')}">
       <div class="row">
         <button class="small primary do-approve">${sw ? 'Re-approve' : 'Approve'}</button>
@@ -248,7 +269,23 @@ $('list').addEventListener('toggle', (e) => {
 }, true);
 
 $('list').addEventListener('change', (e) => {
-  if (e.target.classList.contains('act')) e.target.closest('.approve').querySelector('.to').hidden = e.target.value !== 'swap';
+  if (e.target.classList.contains('act')) e.target.closest('.approve').querySelector('.swap-pick').hidden = e.target.value !== 'swap';
+  if (e.target.classList.contains('to-free')) refreshSwapOptions(e.target.closest('.approve'));
+});
+
+// Typing in the replacement search narrows the list straight away (works on phones, unlike hiding options).
+function refreshSwapOptions(box) {
+  const dish = S.dishes.find((d) => d.pw_dish_id === box.closest('details.dish')?.dataset.dish);
+  const key = box.dataset.id.split('|').slice(1).join('|');
+  const c = dish?.components.find((x) => x.key === key);
+  if (!c) return;
+  const sel = box.querySelector('.to');
+  const keep = sel.value;
+  sel.innerHTML = swapOptions(c, keep, box.querySelector('.to-search').value, box.querySelector('.to-free').checked);
+  sel.value = keep;
+}
+$('list').addEventListener('input', (e) => {
+  if (e.target.classList.contains('to-search')) refreshSwapOptions(e.target.closest('.approve'));
 });
 
 $('list').addEventListener('click', async (e) => {
