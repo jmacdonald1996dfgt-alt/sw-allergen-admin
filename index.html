@@ -40,6 +40,11 @@
   .settings { background:#faf7f4; border-radius:8px; padding:10px; display:grid; gap:8px; grid-template-columns:1fr 1fr; }
   .settings .full { grid-column:1 / -1; }
   [hidden] { display:none !important; }
+  .swapcard { border:1px solid var(--line); border-radius:10px; padding:12px; margin:8px 0; display:grid; gap:8px; background:#fff; }
+  .swapcard.suspended { border-color:#d97706; background:#fffaf0; }
+  .sc-choices { display:flex; flex-wrap:wrap; gap:8px; }
+  .sc-choices label { display:flex; align-items:center; gap:6px; border:1.5px solid var(--line); border-radius:999px; padding:7px 12px; cursor:pointer; font-size:14px; }
+  .sc-choices label:has(input:checked) { border-color:var(--accent); background:#fbeeee; font-weight:600; }
   .mb-tabs { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 10px; }
   .mb-menu { background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px; margin:0 0 12px; display:grid; gap:8px; }
   .mb-section { background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px; margin:0 0 12px; display:grid; gap:8px; }
@@ -93,6 +98,7 @@
     <div class="row" style="margin-top:10px">
       <input id="search" type="text" placeholder="Search a dish or part…" style="flex:1;min-width:180px">
       <select id="view">
+        <option value="swaps">Swaps — pick a dish, set what can be changed</option>
         <option value="menus">Menus (build the website menu)</option>
         <option value="website">On the website</option>
         <option value="ingredients">By ingredient (approve once, every dish)</option>
@@ -175,7 +181,7 @@ const usage = () => { const m = new Map(); for (const d of S.dishes) for (const 
 function swapOptions(c, selectedKey, term, freeOnly) {
   const words = String(term || '').toLowerCase().split(/\s+/).filter(Boolean);
   const bad = c.contains || [];
-  const list = S.comps.filter((x) => x.key !== c.key && !x.unknown && (x.key === selectedKey || (
+  const list = S.comps.filter((x) => x.key !== c.key && !x.unknown && !x.ignored && !/lolli|lolly/i.test(x.name) && (x.key === selectedKey || (
     (!freeOnly || !bad.some((a) => (x.contains || []).includes(a) || (x.may_contain || []).includes(a))) &&
     words.every((w) => `${x.name} ${x.guest_name || ''}`.toLowerCase().includes(w)))));
   const head = `<option value="">${list.length ? `Choose a replacement (${list.length} match${list.length === 1 ? '' : 'es'})` : 'No matches — try another word'}</option>`;
@@ -321,7 +327,7 @@ $('list').addEventListener('click', async (e) => {
   if (!b || b.type === 'checkbox') return;
   const id = b.dataset.id, a = b.dataset.mb;
   const item = S.items.find((i) => i.id === id);
-  if (a === 'pick-menu') { S.menuSel = id; return renderMenus(); }
+  if (a === 'pick-menu') { S.menuSel = id; return render(); }
   if (a === 'add-menu') {
     const name = prompt('Name of the new menu (e.g. Desserts)');
     if (!name?.trim()) return;
@@ -379,9 +385,99 @@ $('list').addEventListener('click', async (e) => {
   }
 });
 
+// ---------------------------------------------------------------- swaps screen (dish first)
+// Pick a menu and a dish; every ingredient in it that brings an allergen gets a simple card:
+// "Can't be changed" / "Can be left off" / "Can be swapped for …". The answer belongs to the ingredient,
+// so it applies on every dish that has it.
+let cardSeq = 0;
+function swapCard(c, used) {
+  const r = ruleFor(c.key);
+  const cur = r ? r.action : 'none';
+  const uid = `sc${++cardSeq}`;
+  const suspended = r && r.status === 'suspended';
+  const freeOf = (c.contains || []).map(short).join(', ');
+  const guest = catalogue(c.key)?.guest_name;
+  return `<div class="swapcard ${suspended ? 'suspended' : ''}" data-key="${esc(c.key)}">
+    <div class="sc-head"><b>${esc(guest || c.name)}</b>${guest && guest !== c.name ? ` <span class="muted">(${esc(c.name)})</span>` : ''}
+      <div class="chips">${(c.contains || []).map((a) => `<span class="chip">Contains ${esc(short(a))}</span>`).join('')}${(c.may_contain || []).map((a) => `<span class="chip may">May contain ${esc(short(a))}</span>`).join('')}</div></div>
+    ${suspended ? `<div class="flag">⚠ Paused: ${esc(r.suspended_reason)}</div>` : ''}
+    ${c.unknown ? '<div class="flag">⚠ Procure Wizard is missing allergen data for this ingredient, so the website won’t offer changes for dishes with it.</div>' : ''}
+    <div class="sc-choices">
+      <label><input type="radio" name="${uid}" value="none" ${cur === 'none' ? 'checked' : ''}> Can’t be changed</label>
+      <label><input type="radio" name="${uid}" value="remove" ${cur === 'remove' ? 'checked' : ''}> Can be left off</label>
+      <label><input type="radio" name="${uid}" value="swap" ${cur === 'swap' ? 'checked' : ''}> Can be swapped for…</label>
+    </div>
+    <div class="swap-pick" ${cur === 'swap' ? '' : 'hidden'}>
+      <input type="search" class="to-search" placeholder="Search what it can be swapped for, e.g. gluten free bun" autocomplete="off">
+      <label class="muted"><input type="checkbox" class="to-free" checked> Only show ones free from ${esc(freeOf)}</label>
+      <select class="to">${swapOptions(c, r?.swap_to_key, '', true)}</select>
+    </div>
+    <input type="text" class="note" placeholder="Note for guests and staff (optional), e.g. served with fries instead" value="${esc(r?.note || '')}">
+    <div class="row"><button class="small primary sc-save">Save</button>
+      <span class="muted">Applies to ${used} dish${used === 1 ? '' : 'es'} with this ingredient${r && !suspended ? ` · currently: ${r.action === 'remove' ? 'can be left off' : 'swap for ' + esc(r.swap_to_name)}` : ''}</span></div>
+  </div>`;
+}
+function renderSwaps() {
+  const used = usage();
+  const term = $('search').value.trim().toLowerCase();
+  if (!S.menus.length) { $('list').innerHTML = '<p class="muted">Build a menu first (Menus view).</p>'; return; }
+  if (!S.menus.some((m) => m.id === S.menuSel)) S.menuSel = S.menus[0].id;
+  const m = S.menus.find((x) => x.id === S.menuSel);
+  let html = `<div class="mb-tabs">${S.menus.map((x) => `<button class="${x.id === m.id ? 'primary' : ''}" data-mb="pick-menu" data-id="${x.id}">${esc(x.name)}</button>`).join('')}</div>
+    <p class="muted">Tap a dish to see the ingredients that bring allergens, and say whether each can be left off or swapped.</p>`;
+  for (const s of S.sections.filter((x) => x.menu_id === m.id).sort((a, b) => a.sort - b.sort)) {
+    const items = S.items.filter((i) => i.section_id === s.id && !i.hidden).sort((a, b) => a.sort - b.sort)
+      .filter((i) => !term || i.name.toLowerCase().includes(term));
+    if (!items.length) continue;
+    html += `<div class="section">${esc(s.name)}</div>`;
+    for (const i of items) {
+      const dishes = (i.pw_dish_ids || []).map((id) => S.dishes.find((d) => d.pw_dish_id === id)).filter(Boolean);
+      const parts = new Map();
+      for (const d of dishes) for (const c of d.components || []) {
+        if (!(c.contains || []).length || catalogue(c.key)?.ignored || /lolli|lolly/i.test(c.name)) continue;
+        if (!parts.has(c.key)) parts.set(c.key, c);
+      }
+      const set = [...parts.keys()].filter((k) => ruleFor(k)?.status === 'active').length;
+      const open = S.open.has('swap:' + i.id);
+      html += `<details class="dish" data-swapdish="${i.id}" ${open ? 'open' : ''}>
+        <summary><span class="name">${esc(i.name)}</span>
+          ${!dishes.length ? '<span class="pill p-warn">Not linked to Procure Wizard</span>'
+            : `<span class="pill ${set ? 'p-ok' : ''}">${parts.size} ingredient${parts.size === 1 ? '' : 's'} with allergens${set ? ` · ${set} can change` : ''}</span>`}
+        </summary>
+        <div class="body">${!dishes.length ? '<p class="flag">Link this dish to its Procure Wizard recipe in the Menus view first, then its ingredients appear here.</p>'
+          : parts.size ? [...parts.values()].map((c) => swapCard(c, used.get(c.key) || 1)).join('') : '<p class="muted">No ingredient in this dish brings an allergen.</p>'}</div>
+      </details>`;
+    }
+  }
+  $('list').innerHTML = html;
+}
+$('list').addEventListener('toggle', (e) => {
+  const d = e.target.closest?.('details[data-swapdish]');
+  if (d) d.open ? S.open.add('swap:' + d.dataset.swapdish) : S.open.delete('swap:' + d.dataset.swapdish);
+}, true);
+$('list').addEventListener('change', (e) => {
+  if (e.target.type === 'radio' && e.target.closest('.swapcard')) e.target.closest('.swapcard').querySelector('.swap-pick').hidden = e.target.value !== 'swap';
+});
+$('list').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.sc-save');
+  if (!btn) return;
+  const card = btn.closest('.swapcard');
+  const key = card.dataset.key;
+  const choice = card.querySelector('input[type=radio]:checked')?.value || 'none';
+  if (choice === 'none') {
+    if (!ruleFor(key)) return toast('Saved — this ingredient can’t be changed.');
+    if (!confirm(`Mark “${catalogue(key)?.name}” as can’t be changed on every dish?`)) return;
+    const { error } = await sb.from('allergen_part_rule').delete().eq('component_key', key);
+    toast(error ? 'Could not save: ' + error.message : 'Saved — can’t be changed, on every dish');
+    return load();
+  }
+  return approve(key, choice, card.querySelector('.to').value, card.querySelector('.note').value.trim());
+});
+
 function render() {
   const term = $('search').value.trim().toLowerCase();
   const view = $('view').value;
+  if (view === 'swaps') return renderSwaps();
   if (view === 'menus') return renderMenus();
   const used = usage();
   if (!S.dishes.length) { $('list').innerHTML = '<p class="muted">No dishes yet — the first sync fills this in (press Sync now, or wait up to 15 minutes).</p>'; return; }
@@ -464,7 +560,7 @@ $('list').addEventListener('toggle', (e) => {
 
 $('list').addEventListener('change', (e) => {
   if (e.target.classList.contains('act')) e.target.closest('.approve').querySelector('.swap-pick').hidden = e.target.value !== 'swap';
-  if (e.target.classList.contains('to-free')) refreshSwapOptions(e.target.closest('.approve'));
+  if (e.target.classList.contains('to-free')) refreshSwapOptions(e.target.closest('.approve, .swapcard'));
 });
 
 // Typing in the replacement search narrows the list straight away (works on phones, unlike hiding options).
@@ -477,7 +573,7 @@ function refreshSwapOptions(box) {
   sel.value = keep;
 }
 $('list').addEventListener('input', (e) => {
-  if (e.target.classList.contains('to-search')) refreshSwapOptions(e.target.closest('.approve'));
+  if (e.target.classList.contains('to-search')) refreshSwapOptions(e.target.closest('.approve, .swapcard'));
 });
 
 $('list').addEventListener('click', async (e) => {
