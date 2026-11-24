@@ -118,7 +118,7 @@ async function load() {
     const [dishes, swaps, comps, runs] = await Promise.all([
       all('allergen_dish', '*', (q) => q.eq('active', true).order('category').order('name')),
       all('allergen_swap', '*'),
-      all('allergen_component', 'key,type,name,guest_name,contains,may_contain,unknown', (q) => q.order('name')),
+      all('allergen_component', 'key,type,name,guest_name,ignored,contains,may_contain,unknown', (q) => q.order('name')),
       sb.from('allergen_sync_run').select('*').order('started_at', { ascending: false }).limit(1)
     ]);
     S.dishes = dishes; S.swaps = swaps; S.comps = comps;
@@ -135,7 +135,11 @@ async function load() {
 const usage = () => { const m = new Map(); for (const d of S.dishes) for (const c of d.components || []) m.set(c.key, (m.get(c.key) || 0) + 1); return m; };
 
 function compHtml(d, c, used) {
-  const sw = S.swaps.find((s) => s.pw_dish_id === d.pw_dish_id && s.component_key === c.key);
+  if (S.comps.find((x) => x.key === c.key)?.ignored || /lolli|lolly/i.test(c.name)) {
+    return `<div class="comp"><div><b>${esc(c.name)}</b> <span class="muted">· ${esc(c.type)} · ${esc(c.qty)}</span><span class="pill p-warn">Ignored on website</span></div>
+      <div class="muted">Not part of what the guest eats, so its allergens aren't shown on the website menu.</div></div>`;
+  }
+  const sw =S.swaps.find((s) => s.pw_dish_id === d.pw_dish_id && s.component_key === c.key);
   const suspended = sw && sw.status === 'suspended';
   const chips = (c.contains || []).map((a) => `<span class="chip">${esc(short(a))}</span>`).join('') + (c.may_contain || []).map((a) => `<span class="chip may">May: ${esc(short(a))}</span>`).join('');
   const status = sw ? `<span class="pill ${suspended ? 'p-warn' : 'p-ok'}">${suspended ? 'Suspended' : sw.action === 'remove' ? 'Can be left off' : 'Swap → ' + esc(sw.swap_to_name)}</span>` : '';
